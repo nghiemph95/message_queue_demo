@@ -1,0 +1,13 @@
+{
+  "name": "consumer-kafka",
+  "version": "1.0.0",
+  "description": "Kafka Consumer service",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "dotenv": "^16.0.3"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "producer",
+  "version": "1.0.0",
+  "description": "Producer service for Kafka and RabbitMQ",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "amqplib": "^0.10.3",
+    "dotenv": "^16.0.3"
+  }
+}

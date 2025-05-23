@@ -1,0 +1,13 @@
+{
+  "name": "consumer-rabbitmq",
+  "version": "1.0.0",
+  "description": "RabbitMQ Consumer service",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.3",
+    "dotenv": "^16.0.3"
+  }
+}
