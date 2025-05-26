@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - message-queue-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - message-queue-network
+
+  # RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3.11-management
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    networks:
+      - message-queue-network
+
+  # Producer
+  producer:
+    build: ./producer
+    depends_on:
+      - kafka
+      - rabbitmq
+    ports:
+      - "3000:3000"  # Expose API port
+    environment:
+      - KAFKA_BROKER=kafka:29092
+      - KAFKA_TOPIC=test-topic
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq
+      - RABBITMQ_QUEUE=test-queue
+      - PORT=3000
+    networks:
+      - message-queue-network
+
+  # Kafka Consumer
+  consumer-kafka:
+    build: ./consumer-kafka
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BROKER=kafka:29092
+      - KAFKA_TOPIC=test-topic
+    networks:
+      - message-queue-network
+
+  # RabbitMQ Consumer
+  consumer-rabbitmq:
+    build: ./consumer-rabbitmq
+    depends_on:
+      - rabbitmq
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq
+      - RABBITMQ_QUEUE=test-queue
+    networks:
+      - message-queue-network
+
+networks:
+  message-queue-network:
+    driver: bridge
