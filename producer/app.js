@@ -541,11 +541,9 @@ app.post("/send", async (req, res) => {
         });
       }
     } else {
-      return res
-        .status(400)
-        .json({
-          error: 'Target không hợp lệ. Sử dụng "kafka", "rabbitmq", hoặc "all"',
-        });
+      return res.status(400).json({
+        error: 'Target không hợp lệ. Sử dụng "kafka", "rabbitmq", hoặc "all"',
+      });
     }
   } catch (error) {
     console.error("Lỗi khi gửi tin nhắn:", error);
@@ -619,12 +617,10 @@ app.post("/kafka/admin", async (req, res) => {
     return res.json({ success: true, result });
   } catch (error) {
     console.error("Kafka admin error:", error);
-    res
-      .status(500)
-      .json({
-        error: "Failed to perform Kafka admin action",
-        details: error.message,
-      });
+    res.status(500).json({
+      error: "Failed to perform Kafka admin action",
+      details: error.message,
+    });
   }
 });
 
@@ -726,12 +722,10 @@ app.post("/rabbitmq/admin", async (req, res) => {
     return res.json({ success: true, result });
   } catch (error) {
     console.error("RabbitMQ admin error:", error);
-    res
-      .status(500)
-      .json({
-        error: "Failed to perform RabbitMQ admin action",
-        details: error.message,
-      });
+    res.status(500).json({
+      error: "Failed to perform RabbitMQ admin action",
+      details: error.message,
+    });
   }
 });
 
