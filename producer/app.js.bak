@@ -12,7 +12,48 @@ const kafka = new Kafka({
   clientId: "demo-producer",
   brokers: [process.env.KAFKA_BROKER || "kafka:29092"],
 });
+
+// Tạo producer thông thường
 const producer = kafka.producer();
+
+// Tạo transactional producer với transactionalId
+const transactionalProducer = kafka.producer({
+  transactionalId: "demo-transactional-producer",
+  maxInFlightRequests: 1,
+  idempotent: true, // Đảm bảo exactly-once semantics
+});
+
+// Khởi tạo Schema Registry client (giả lập)
+const schemaRegistry = {
+  register: async (schema, subject) => {
+    console.log(`Đăng ký schema cho ${subject}:`, schema);
+    return { id: Math.floor(Math.random() * 1000) };
+  },
+  getById: async (id) => {
+    console.log(`Lấy schema với ID: ${id}`);
+    // Giả lập schema
+    return {
+      schema: JSON.stringify({
+        type: "record",
+        name: "User",
+        fields: [
+          { name: "name", type: "string" },
+          { name: "age", type: "int" },
+        ],
+      }),
+    };
+  },
+  encode: (message, schemaId) => {
+    // Giả lập encode với schema
+    console.log(`Encode tin nhắn với schema ID: ${schemaId}`, message);
+    return Buffer.from(JSON.stringify(message));
+  },
+  decode: (buffer, schemaId) => {
+    // Giả lập decode với schema
+    console.log(`Decode tin nhắn với schema ID: ${schemaId}`);
+    return JSON.parse(buffer.toString());
+  },
+};
 
 // Connect to Kafka on startup with exponential backoff retry
 async function connectKafka(retryCount = 0) {
@@ -301,6 +342,157 @@ const rabbitPool = {
 // Khởi tạo kết nối RabbitMQ khi khởi động
 rabbitPool.connect();
 
+// Kết nối transactional producer
+async function connectTransactionalProducer() {
+  try {
+    await transactionalProducer.connect();
+    console.log("Kết nối thành công đến Kafka với transactional producer");
+    return true;
+  } catch (error) {
+    console.error("Lỗi khi kết nối transactional producer:", error);
+    return false;
+  }
+}
+
+connectTransactionalProducer();
+
+// Gửi tin nhắn đến Dead Letter Exchange khi xử lý thất bại
+async function sendToDeadLetterExchange(message, reason, options = {}) {
+  try {
+    // Đảm bảo có kết nối
+    const connected = await rabbitPool.ensureConnection();
+    if (!connected) {
+      throw new Error("Không thể kết nối đến RabbitMQ để gửi tin nhắn đến DLX");
+    }
+
+    const channel = rabbitPool.channel;
+
+    // Khai báo Dead Letter Exchange
+    const dlxName = options.dlxName || "demo.dlx";
+    await channel.assertExchange(dlxName, "direct", { durable: true });
+
+    // Khai báo Dead Letter Queue
+    const dlqName = options.dlqName || "demo.dlq";
+    const dlq = await channel.assertQueue(dlqName, {
+      durable: true,
+      arguments: {
+        "x-message-ttl": options.messageTtl || 86400000, // 1 ngày mặc định
+        "x-max-length": options.maxLength || 1000, // Giới hạn số lượng tin nhắn
+      },
+    });
+
+    // Bind queue với exchange
+    const routingKey = options.routingKey || "dead-letter";
+    await channel.bindQueue(dlqName, dlxName, routingKey);
+
+    // Chuẩn bị tin nhắn với metadata về lỗi
+    const messageContent =
+      typeof message === "object" ? message : { content: message };
+    const deadLetterMessage = {
+      ...messageContent,
+      _dead_letter_info: {
+        reason: reason,
+        timestamp: new Date().toISOString(),
+        retryCount: options.retryCount || 0,
+        originalQueue: options.originalQueue || "unknown",
+        originalExchange: options.originalExchange || "unknown",
+      },
+    };
+
+    // Gửi tin nhắn đến Dead Letter Exchange
+    await channel.publish(
+      dlxName,
+      routingKey,
+      Buffer.from(JSON.stringify(deadLetterMessage)),
+      {
+        persistent: true,
+        headers: {
+          "x-dead-letter-reason": reason,
+          ...options.headers,
+        },
+      }
+    );
+
+    return { success: true, dlx: dlxName, dlq: dlqName };
+  } catch (error) {
+    console.error("Lỗi khi gửi tin nhắn đến Dead Letter Exchange:", error);
+    throw error;
+  }
+}
+
+// Gửi tin nhắn với độ ưu tiên
+async function sendWithPriority(message, priority, options = {}) {
+  try {
+    // Đảm bảo có kết nối
+    const connected = await rabbitPool.ensureConnection();
+    if (!connected) {
+      throw new Error("Không thể kết nối đến RabbitMQ để gửi tin nhắn ưu tiên");
+    }
+
+    const channel = rabbitPool.channel;
+
+    // Xác định exchange và queue
+    const exchangeName = options.exchange || "";
+    const queueName =
+      options.queue || process.env.RABBITMQ_QUEUE || "priority-queue";
+
+    // Khai báo queue với hỗ trợ priority
+    const maxPriority = options.maxPriority || 10;
+    await channel.assertQueue(queueName, {
+      durable: true,
+      arguments: {
+        "x-max-priority": maxPriority,
+        ...options.queueArguments,
+      },
+    });
+
+    // Nếu có exchange, khai báo và bind
+    if (exchangeName) {
+      const exchangeType = options.exchangeType || "direct";
+      await channel.assertExchange(exchangeName, exchangeType, {
+        durable:
+          options.durableExchange !== undefined
+            ? options.durableExchange
+            : true,
+      });
+
+      const routingKey = options.routingKey || "";
+      await channel.bindQueue(queueName, exchangeName, routingKey);
+    }
+
+    // Chuẩn bị tin nhắn
+    const content =
+      typeof message === "object" ? JSON.stringify(message) : message;
+
+    // Gửi tin nhắn với priority
+    if (exchangeName) {
+      await channel.publish(
+        exchangeName,
+        options.routingKey || "",
+        Buffer.from(content),
+        {
+          persistent:
+            options.persistent !== undefined ? options.persistent : true,
+          priority: priority, // Độ ưu tiên của tin nhắn (0-9, 9 là cao nhất)
+          ...options.publishOptions,
+        }
+      );
+    } else {
+      await channel.sendToQueue(queueName, Buffer.from(content), {
+        persistent:
+          options.persistent !== undefined ? options.persistent : true,
+        priority: priority, // Độ ưu tiên của tin nhắn (0-9, 9 là cao nhất)
+        ...options.publishOptions,
+      });
+    }
+
+    return { success: true, priority, queue: queueName };
+  } catch (error) {
+    console.error("Lỗi khi gửi tin nhắn ưu tiên:", error);
+    throw error;
+  }
+}
+
 // Send message to RabbitMQ with advanced options
 async function sendToRabbitMQ(message, options = {}) {
   try {
@@ -329,7 +521,30 @@ async function sendToRabbitMQ(message, options = {}) {
     // Xác định tên hàng đợi
     const queue = options.queue || process.env.RABBITMQ_QUEUE || "test-queue";
 
-    // Khai báo hàng đợi với các tùy chỉnh
+    // Cấu hình Dead Letter Exchange nếu được yêu cầu
+    const queueArguments = {};
+    if (options.enableDeadLetter) {
+      const dlxName = options.dlxName || "demo.dlx";
+      const dlxRoutingKey = options.dlxRoutingKey || queue;
+
+      // Khai báo Dead Letter Exchange
+      await channel.assertExchange(dlxName, "direct", { durable: true });
+
+      // Thêm cấu hình DLX vào queue arguments
+      queueArguments["x-dead-letter-exchange"] = dlxName;
+      queueArguments["x-dead-letter-routing-key"] = dlxRoutingKey;
+
+      if (options.messageTtl) {
+        queueArguments["x-message-ttl"] = options.messageTtl;
+      }
+    }
+
+    // Cấu hình Priority Queue nếu được yêu cầu
+    if (options.enablePriority) {
+      queueArguments["x-max-priority"] = options.maxPriority || 10;
+    }
+
+    // Khai báo hàng đợi với các tùy chỉnh và arguments
     const queueOptions = {
       // durable: true - hàng đợi sẽ được lưu trữ trên đĩa, tồn tại sau khi restart
       durable: options.durable !== undefined ? options.durable : true,
@@ -338,7 +553,10 @@ async function sendToRabbitMQ(message, options = {}) {
       // autoDelete: true - tự động xóa hàng đợi khi không còn kết nối nào
       autoDelete: options.autoDelete || false,
       // arguments - các đối số bổ sung cho hàng đợi
-      arguments: options.arguments || {},
+      arguments: {
+        ...queueArguments,
+        ...options.queueArguments,
+      },
     };
 
     // Nếu có deadLetterExchange, thêm vào arguments
@@ -430,6 +648,52 @@ async function sendToRabbitMQ(message, options = {}) {
       } else {
         console.warn("Tin nhắn đã được đưa vào hàng đợi nội bộ do kênh bị đầy");
       }
+    }
+
+    // Nếu yêu cầu xác nhận, đợi xác nhận từ broker
+    if (options.confirm) {
+      // Bật chế độ confirm trên channel nếu chưa bật
+      if (!channel.isConfirmChannel) {
+        await channel.confirmChannel();
+        channel.isConfirmChannel = true;
+      }
+
+      await new Promise((resolve, reject) => {
+        // Đăng ký callback cho confirms và returns
+        channel.on("ack", (seqId) => {
+          console.log(
+            `Tin nhắn với seqId ${seqId} đã được xác nhận bởi RabbitMQ`
+          );
+        });
+
+        channel.on("nack", (seqId) => {
+          console.warn(
+            `Tin nhắn với seqId ${seqId} đã bị từ chối bởi RabbitMQ`
+          );
+        });
+
+        channel.on("return", (msg) => {
+          console.warn(
+            `Tin nhắn đã bị trả lại: ${msg.content.toString()}, code: ${
+              msg.fields.replyCode
+            }`
+          );
+        });
+
+        channel
+          .waitForConfirms()
+          .then(() => {
+            console.log("Tất cả tin nhắn đã được xác nhận bởi RabbitMQ");
+            resolve();
+          })
+          .catch((err) => {
+            console.error(
+              "Một số tin nhắn không được xác nhận bởi RabbitMQ:",
+              err
+            );
+            reject(err);
+          });
+      });
     }
 
     // Nếu yêu cầu xác nhận, đợi xác nhận từ server
@@ -553,6 +817,87 @@ app.post("/send", async (req, res) => {
   }
 });
 
+// Gửi tin nhắn với transactional API
+async function sendWithTransaction(messages, options = {}) {
+  try {
+    // Đảm bảo producer đã kết nối
+    if (!global.kafkaConnected) {
+      await connectTransactionalProducer();
+    }
+
+    // Bắt đầu transaction
+    await transactionalProducer.transaction(async (transaction) => {
+      console.log("Bắt đầu Kafka transaction");
+
+      // Chuẩn bị tin nhắn
+      const topic = options.topic || process.env.KAFKA_TOPIC || "test-topic";
+      const formattedMessages = Array.isArray(messages) ? messages : [messages];
+
+      // Gửi tin nhắn trong transaction
+      const result = await transaction.send({
+        topic,
+        messages: formattedMessages.map((msg) => ({
+          key: options.key || String(Math.floor(Math.random() * 10)),
+          value: typeof msg === "object" ? JSON.stringify(msg) : String(msg),
+          headers: options.headers || {
+            source: "transactional-producer",
+            timestamp: Date.now().toString(),
+          },
+        })),
+      });
+
+      // Mô phỏng xử lý logic nghiệp vụ
+      if (options.simulateError) {
+        console.log("Mô phỏng lỗi, abort transaction");
+        await transaction.abort();
+        throw new Error("Transaction aborted due to simulated error");
+      }
+
+      console.log("Commit Kafka transaction");
+      // Transaction tự động commit khi callback hoàn thành
+      return result;
+    });
+
+    return { success: true, transactional: true };
+  } catch (error) {
+    console.error("Lỗi trong Kafka transaction:", error);
+    throw error;
+  }
+}
+
+// Gửi tin nhắn với Avro schema
+async function sendWithSchema(message, schemaId, options = {}) {
+  try {
+    // Lấy schema từ registry
+    const schema = await schemaRegistry.getById(schemaId);
+
+    // Encode tin nhắn với schema
+    const encodedMessage = schemaRegistry.encode(message, schemaId);
+
+    // Gửi tin nhắn đã encode
+    const topic = options.topic || process.env.KAFKA_TOPIC || "test-topic";
+
+    const result = await producer.send({
+      topic,
+      messages: [
+        {
+          key: options.key || String(Math.floor(Math.random() * 10)),
+          value: encodedMessage,
+          headers: {
+            ...options.headers,
+            "schema-id": String(schemaId),
+          },
+        },
+      ],
+    });
+
+    return { success: true, schemaId };
+  } catch (error) {
+    console.error("Lỗi khi gửi tin nhắn với schema:", error);
+    throw error;
+  }
+}
+
 // API endpoint cho các tính năng nâng cao của Kafka
 app.post("/kafka/admin", async (req, res) => {
   try {
@@ -574,6 +919,14 @@ app.post("/kafka/admin", async (req, res) => {
         if (!options?.topic) {
           await admin.disconnect();
           return res.status(400).json({ error: "Topic name is required" });
+        }
+
+        // Kiểm tra nếu là compacted topic
+        if (options.compacted) {
+          // Đối với compacted topic, cleanup.policy phải là 'compact'
+          if (!options.configs) options.configs = {};
+          options.configs["cleanup.policy"] = "compact";
+          console.log("Tạo compacted topic với cleanup.policy=compact");
         }
 
         result = await admin.createTopics({
@@ -608,6 +961,62 @@ app.post("/kafka/admin", async (req, res) => {
         });
         break;
 
+      case "register-schema":
+        // Đăng ký schema mới
+        if (!options?.schema || !options?.subject) {
+          await admin.disconnect();
+          return res
+            .status(400)
+            .json({ error: "Schema and subject are required" });
+        }
+
+        try {
+          const registrationResult = await schemaRegistry.register(
+            options.schema,
+            options.subject
+          );
+          result = registrationResult;
+        } catch (error) {
+          await admin.disconnect();
+          return res.status(500).json({
+            error: "Failed to register schema",
+            details: error.message,
+          });
+        }
+        break;
+
+      case "create-compacted-topic":
+        // Tạo compacted topic
+        if (!options?.topic) {
+          await admin.disconnect();
+          return res.status(400).json({ error: "Topic name is required" });
+        }
+
+        await admin.createTopics({
+          topics: [
+            {
+              topic: options.topic,
+              numPartitions: options.numPartitions || 1,
+              replicationFactor: options.replicationFactor || 1,
+              configEntries: [
+                { name: "cleanup.policy", value: "compact" },
+                {
+                  name: "min.compaction.lag.ms",
+                  value: options.minCompactionLag || "0",
+                },
+                {
+                  name: "max.compaction.lag.ms",
+                  value: options.maxCompactionLag || "86400000",
+                }, // 1 day default
+                { name: "segment.ms", value: options.segmentMs || "604800000" }, // 1 week default
+              ],
+            },
+          ],
+        });
+
+        result = { topic: options.topic, compacted: true };
+        break;
+
       default:
         await admin.disconnect();
         return res.status(400).json({ error: `Unknown action: ${action}` });
@@ -621,6 +1030,149 @@ app.post("/kafka/admin", async (req, res) => {
       error: "Failed to perform Kafka admin action",
       details: error.message,
     });
+  }
+});
+
+// API endpoint để gửi tin nhắn với các tính năng nâng cao
+app.post("/send/advanced", async (req, res) => {
+  try {
+    const { message, target, options, feature } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    if (!feature) {
+      return res.status(400).json({ error: "Feature is required" });
+    }
+
+    // Xử lý tin nhắn (chuỗi hoặc object)
+    let processedMessage;
+    if (typeof message === "string") {
+      processedMessage = message;
+    } else {
+      // Nếu là object, thêm timestamp vào
+      processedMessage = {
+        ...message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    // Kết quả gửi tin nhắn
+    let result;
+
+    switch (feature) {
+      case "kafka-transaction":
+        // Gửi tin nhắn với Kafka transaction
+        try {
+          result = await sendWithTransaction(
+            processedMessage,
+            options?.kafka || {}
+          );
+          return res.json({
+            success: true,
+            feature: "kafka-transaction",
+            result,
+          });
+        } catch (error) {
+          return res.status(500).json({
+            success: false,
+            error: `Lỗi khi gửi tin nhắn với Kafka transaction: ${error.message}`,
+            details: error,
+          });
+        }
+
+      case "kafka-schema":
+        // Gửi tin nhắn với Kafka schema
+        if (!options?.schemaId) {
+          return res.status(400).json({ error: "Schema ID is required" });
+        }
+
+        try {
+          result = await sendWithSchema(
+            processedMessage,
+            options.schemaId,
+            options?.kafka || {}
+          );
+          return res.json({
+            success: true,
+            feature: "kafka-schema",
+            result,
+          });
+        } catch (error) {
+          return res.status(500).json({
+            success: false,
+            error: `Lỗi khi gửi tin nhắn với Kafka schema: ${error.message}`,
+            details: error,
+          });
+        }
+
+      case "rabbitmq-priority":
+        // Gửi tin nhắn với độ ưu tiên
+        if (options?.priority === undefined) {
+          return res.status(400).json({ error: "Priority is required" });
+        }
+
+        try {
+          result = await sendWithPriority(
+            processedMessage,
+            options.priority,
+            options?.rabbitmq || {}
+          );
+          return res.json({
+            success: true,
+            feature: "rabbitmq-priority",
+            result,
+          });
+        } catch (error) {
+          return res.status(500).json({
+            success: false,
+            error: `Lỗi khi gửi tin nhắn ưu tiên: ${error.message}`,
+            details: error,
+          });
+        }
+
+      case "rabbitmq-dlx":
+        // Gửi tin nhắn đến Dead Letter Exchange
+        if (!options?.reason) {
+          return res.status(400).json({ error: "Reason is required" });
+        }
+
+        try {
+          result = await sendToDeadLetterExchange(
+            processedMessage,
+            options.reason,
+            options?.rabbitmq || {}
+          );
+          return res.json({
+            success: true,
+            feature: "rabbitmq-dlx",
+            result,
+          });
+        } catch (error) {
+          return res.status(500).json({
+            success: false,
+            error: `Lỗi khi gửi tin nhắn đến DLX: ${error.message}`,
+            details: error,
+          });
+        }
+
+      default:
+        return res.status(400).json({
+          error: `Tính năng không hỗ trợ: ${feature}`,
+          supportedFeatures: [
+            "kafka-transaction",
+            "kafka-schema",
+            "rabbitmq-priority",
+            "rabbitmq-dlx",
+          ],
+        });
+    }
+  } catch (error) {
+    console.error("Lỗi khi gửi tin nhắn nâng cao:", error);
+    res
+      .status(500)
+      .json({ error: "Không thể gửi tin nhắn", details: error.message });
   }
 });
 
@@ -667,11 +1219,38 @@ app.post("/rabbitmq/admin", async (req, res) => {
           return res.status(400).json({ error: "Queue name is required" });
         }
 
+        // Cấu hình queue arguments
+        const queueArguments = options.arguments || {};
+
+        // Cấu hình Dead Letter Exchange nếu được yêu cầu
+        if (options.deadLetterExchange) {
+          queueArguments["x-dead-letter-exchange"] = options.deadLetterExchange;
+          if (options.deadLetterRoutingKey) {
+            queueArguments["x-dead-letter-routing-key"] =
+              options.deadLetterRoutingKey;
+          }
+        }
+
+        // Cấu hình Priority Queue nếu được yêu cầu
+        if (options.enablePriority) {
+          queueArguments["x-max-priority"] = options.maxPriority || 10;
+        }
+
+        // Cấu hình Queue TTL nếu được yêu cầu
+        if (options.messageTtl) {
+          queueArguments["x-message-ttl"] = options.messageTtl;
+        }
+
+        // Cấu hình Queue Length Limit nếu được yêu cầu
+        if (options.maxLength) {
+          queueArguments["x-max-length"] = options.maxLength;
+        }
+
         result = await channel.assertQueue(options.name, {
           durable: options.durable !== undefined ? options.durable : true,
           exclusive: options.exclusive || false,
           autoDelete: options.autoDelete || false,
-          arguments: options.arguments || {},
+          arguments: queueArguments,
         });
         break;
 
@@ -713,6 +1292,57 @@ app.post("/rabbitmq/admin", async (req, res) => {
 
         await channel.deleteExchange(options.name);
         result = { exchangeName: options.name, deleted: true };
+        break;
+
+      case "create-dlx":
+        // Tạo Dead Letter Exchange và Queue
+        if (!options?.exchange || !options?.queue) {
+          return res
+            .status(400)
+            .json({ error: "Exchange and queue names are required" });
+        }
+
+        // Khai báo Dead Letter Exchange
+        await channel.assertExchange(
+          options.exchange,
+          options.exchangeType || "direct",
+          {
+            durable: options.durable !== undefined ? options.durable : true,
+          }
+        );
+
+        // Khai báo Dead Letter Queue
+        const dlq = await channel.assertQueue(options.queue, {
+          durable: options.durable !== undefined ? options.durable : true,
+          arguments: {
+            "x-message-ttl": options.messageTtl || 86400000, // 1 ngày mặc định
+            "x-max-length": options.maxLength || 1000, // Giới hạn số lượng tin nhắn
+            ...options.queueArguments,
+          },
+        });
+
+        // Bind queue với exchange
+        await channel.bindQueue(
+          options.queue,
+          options.exchange,
+          options.routingKey || "dead-letter"
+        );
+
+        result = {
+          exchange: options.exchange,
+          queue: options.queue,
+          messageCount: dlq.messageCount,
+          consumerCount: dlq.consumerCount,
+        };
+        break;
+
+      case "purge-queue":
+        // Xóa tất cả tin nhắn trong queue
+        if (!options?.name) {
+          return res.status(400).json({ error: "Queue name is required" });
+        }
+
+        result = await channel.purgeQueue(options.name);
         break;
 
       default:
