@@ -219,7 +219,8 @@ class RabbitMQService {
       // Chuẩn bị các tùy chọn cho tin nhắn
       const messageOptions = {
         // persistent: true - tin nhắn sẽ được lưu trữ trên đĩa
-        persistent: options.persistent !== undefined ? options.persistent : true,
+        persistent:
+          options.persistent !== undefined ? options.persistent : true,
         // expiration - thời gian sống của tin nhắn (ms)
         expiration: options.expiration,
         // contentType - kiểu dữ liệu của tin nhắn
@@ -232,7 +233,9 @@ class RabbitMQService {
           timestamp: new Date().toISOString(),
         },
         // messageId - ID của tin nhắn
-        messageId: options.messageId || `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        messageId:
+          options.messageId ||
+          `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         // correlationId - ID tương quan (dùng cho RPC)
         correlationId: options.correlationId,
         // replyTo - queue để nhận phản hồi (dùng cho RPC)
@@ -331,7 +334,9 @@ class RabbitMQService {
       // Đảm bảo có kết nối
       const connected = await this.ensureConnection();
       if (!connected) {
-        throw new Error("Không thể kết nối đến RabbitMQ để gửi tin nhắn ưu tiên");
+        throw new Error(
+          "Không thể kết nối đến RabbitMQ để gửi tin nhắn ưu tiên"
+        );
       }
 
       const channel = this.channel;
@@ -354,16 +359,12 @@ class RabbitMQService {
       // Nếu có exchange, khai báo và bind
       if (exchangeName) {
         const exchangeType = options.exchangeType || "direct";
-        await channel.assertExchange(
-          exchangeName,
-          exchangeType,
-          {
-            durable:
-              options.durableExchange !== undefined
-                ? options.durableExchange
-                : true,
-          }
-        );
+        await channel.assertExchange(exchangeName, exchangeType, {
+          durable:
+            options.durableExchange !== undefined
+              ? options.durableExchange
+              : true,
+        });
 
         const routingKey = options.routingKey || "";
         await channel.bindQueue(queueName, exchangeName, routingKey);
@@ -414,7 +415,9 @@ class RabbitMQService {
       // Đảm bảo có kết nối
       const connected = await this.ensureConnection();
       if (!connected) {
-        throw new Error("Không thể kết nối đến RabbitMQ để gửi tin nhắn đến DLX");
+        throw new Error(
+          "Không thể kết nối đến RabbitMQ để gửi tin nhắn đến DLX"
+        );
       }
 
       const channel = this.channel;
@@ -483,7 +486,9 @@ class RabbitMQService {
       // Đảm bảo có kết nối
       const connected = await this.ensureConnection();
       if (!connected) {
-        throw new Error("Không thể kết nối đến RabbitMQ để thực hiện thao tác quản trị");
+        throw new Error(
+          "Không thể kết nối đến RabbitMQ để thực hiện thao tác quản trị"
+        );
       }
 
       const channel = this.channel;
@@ -517,7 +522,8 @@ class RabbitMQService {
 
           // Cấu hình Dead Letter Exchange nếu được yêu cầu
           if (options.deadLetterExchange) {
-            queueArguments["x-dead-letter-exchange"] = options.deadLetterExchange;
+            queueArguments["x-dead-letter-exchange"] =
+              options.deadLetterExchange;
             if (options.deadLetterRoutingKey) {
               queueArguments["x-dead-letter-routing-key"] =
                 options.deadLetterRoutingKey;

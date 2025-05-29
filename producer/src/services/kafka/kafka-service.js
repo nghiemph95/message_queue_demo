@@ -138,7 +138,9 @@ class KafkaService {
       } else {
         // Single message mode
         const msgValue =
-          typeof message === "object" ? JSON.stringify(message) : String(message);
+          typeof message === "object"
+            ? JSON.stringify(message)
+            : String(message);
         messages = [
           {
             key: options.key || String(Math.floor(Math.random() * 10)),
@@ -205,7 +207,9 @@ class KafkaService {
 
         // Chuẩn bị tin nhắn
         const topic = options.topic || config.kafka.defaultTopic;
-        const formattedMessages = Array.isArray(messages) ? messages : [messages];
+        const formattedMessages = Array.isArray(messages)
+          ? messages
+          : [messages];
 
         // Gửi tin nhắn trong transaction
         const result = await transaction.send({
