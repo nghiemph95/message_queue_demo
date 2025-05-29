@@ -177,8 +177,8 @@ class RabbitMQService {
 
       // Khai báo hàng đợi với các tùy chỉnh và arguments
       const queueOptions = {
-        // durable: true - hàng đợi sẽ được lưu trữ trên đĩa, tồn tại sau khi restart
-        durable: options.durable !== undefined ? options.durable : true,
+        // durable: false - khớp với cấu hình queue hiện tại
+        durable: options.durable !== undefined ? options.durable : false,
         // exclusive: true - chỉ cho phép kết nối hiện tại truy cập hàng đợi
         exclusive: options.exclusive || false,
         // autoDelete: true - tự động xóa hàng đợi khi không còn kết nối nào
@@ -344,7 +344,7 @@ class RabbitMQService {
       // Khai báo queue với hỗ trợ priority
       const maxPriority = options.maxPriority || 10;
       await channel.assertQueue(queueName, {
-        durable: true,
+        durable: false,
         arguments: {
           "x-max-priority": maxPriority,
           ...options.queueArguments,
