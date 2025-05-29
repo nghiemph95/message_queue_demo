@@ -2,9 +2,9 @@
   "name": "producer",
   "version": "1.0.0",
   "description": "Producer service for Kafka and RabbitMQ",
-  "main": "app.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "kafkajs": "^2.2.4",
