@@ -256,6 +256,107 @@ router.post("/admin", async (req, res) => {
         result = { topic: options.topic, compacted: true };
         break;
 
+      case "update-partitions":
+        // Tăng số lượng partition cho topic
+        if (!options?.topic) {
+          await admin.disconnect();
+          return res.status(400).json({ error: "Topic name is required" });
+        }
+
+        // Chỉ có thể tăng số lượng partition, không thể giảm
+        if (!options?.numPartitions) {
+          await admin.disconnect();
+          return res
+            .status(400)
+            .json({ error: "Number of partitions is required" });
+        }
+
+        result = await admin.createPartitions({
+          topicPartitions: [
+            {
+              topic: options.topic,
+              count: options.numPartitions, // Số lượng partition mới
+            },
+          ],
+          validateOnly: options.validateOnly || false,
+        });
+
+        break;
+
+      case "partition-offsets":
+        // Lấy thông tin offset của các partition
+        if (!options?.topic) {
+          await admin.disconnect();
+          return res.status(400).json({ error: "Topic name is required" });
+        }
+
+        // Lấy metadata trước để biết số lượng partition
+        const metadata = await admin.fetchTopicMetadata({
+          topics: [options.topic],
+        });
+
+        const partitions = metadata.topics[0].partitions;
+        const partitionOffsets = [];
+
+        for (const partition of partitions) {
+          const offsets = await admin.fetchTopicOffsets(options.topic, [
+            partition.partitionId,
+          ]);
+          partitionOffsets.push(offsets[0]);
+        }
+
+        result = {
+          topic: options.topic,
+          partitionCount: partitions.length,
+          offsets: partitionOffsets,
+        };
+
+        break;
+
+      case "consumer-lag":
+        // Theo dõi độ trễ của consumer
+        if (!options?.groupId || !options?.topic) {
+          await admin.disconnect();
+          return res
+            .status(400)
+            .json({ error: "Group ID and topic are required" });
+        }
+
+        // Lấy offset của consumer group
+        const offsetsByGroup = await admin.fetchOffsets({
+          groupId: options.groupId,
+          topics: [options.topic],
+        });
+
+        // Lấy offset mới nhất của topic
+        const latestOffsets = await admin.fetchTopicOffsets(options.topic);
+
+        // Tính toán lag cho từng partition
+        const lagByPartition = latestOffsets.map((latest) => {
+          const partition = latest.partition;
+          const consumerOffset = offsetsByGroup.topics[0].partitions.find(
+            (p) => p.partition === partition
+          );
+
+          return {
+            partition,
+            latestOffset: latest.offset,
+            consumerOffset: consumerOffset ? consumerOffset.offset : "0",
+            lag: consumerOffset
+              ? latest.offset - consumerOffset.offset
+              : latest.offset,
+          };
+        });
+
+        result = {
+          topic: options.topic,
+          groupId: options.groupId,
+          totalLag: lagByPartition.reduce((sum, p) => sum + p.lag, 0),
+          lagByPartition,
+        };
+
+        break;
+
       default:
         await admin.disconnect();
         return res.status(400).json({ error: `Unknown action: ${action}` });

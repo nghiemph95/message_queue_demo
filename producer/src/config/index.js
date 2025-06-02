@@ -10,6 +10,10 @@ module.exports = {
     brokers: [process.env.KAFKA_BROKER || "kafka:29092"],
     defaultTopic: process.env.KAFKA_TOPIC || "test-topic",
     transactionalId: "demo-transactional-producer",
+    // Them cau hinh cho partition
+    defaultPartitions: parseInt(process.env.KAFKA_DEFAULT_PARTITIONS || "12"), // Số partition mặc định
+    maxPartitions: parseInt(process.env.KAFKA_MAX_PARTITIONS || "48"), // Giới hạn tối đa partition
+    partitioningKey: process.env.KAFKA_PARTITIONING_KEY || "id", // Trường dùng để phân vùng
   },
 
   // Cấu hình RabbitMQ

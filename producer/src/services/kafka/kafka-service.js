@@ -306,6 +306,106 @@ class KafkaService {
       console.error("Lỗi khi đóng kết nối Kafka:", error);
     }
   }
+
+  /**
+   * Phân tích hiệu năng của partition
+   * @param {String} topic - Tên topic
+   * @param {String} groupId - ID của consumer group
+   * @returns {Object} Kết quả phân tích
+   */
+  async analyzePartitionPerformance(topic, groupId) {
+    try {
+      const admin = this.createAdminClient();
+      await admin.connect();
+
+      // Lấy metadata của topic
+      const metadata = await admin.fetchTopicMetadata({
+        topics: [topic],
+      });
+
+      // Lấy thông tin về consumer group
+      const offsetsByGroup = await admin.fetchOffsets({
+        groupId,
+        topics: [topic],
+      });
+
+      // Lấy offset mới nhất của topic
+      const latestOffsets = await admin.fetchTopicOffsets(topic);
+
+      // Tính toán lag và throughput cho từng partition
+      const partitionStats = latestOffsets.map((latest) => {
+        const partition = latest.partition;
+        const consumerOffset = offsetsByGroup.topics[0].partitions.find(
+          (p) => p.partition === partition
+        );
+
+        return {
+          partition,
+          latestOffset: latest.offset,
+          consumerOffset: consumerOffset ? consumerOffset.offset : "0",
+          lag: consumerOffset
+            ? latest.offset - consumerOffset.offset
+            : latest.offset,
+        };
+      });
+
+      // Tính tổng lag và phân tích phân phối
+      const totalLag = partitionStats.reduce((sum, p) => sum + p.lag, 0);
+      const avgLag = totalLag / partitionStats.length;
+      const maxLag = Math.max(...partitionStats.map((p) => p.lag));
+      const minLag = Math.min(...partitionStats.map((p) => p.lag));
+      const lagVariance =
+        partitionStats.reduce(
+          (sum, p) => sum + Math.pow(p.lag - avgLag, 2),
+          0
+        ) / partitionStats.length;
+
+      await admin.disconnect();
+
+      return {
+        topic,
+        groupId,
+        partitionCount: partitionStats.length,
+        totalLag,
+        avgLag,
+        maxLag,
+        minLag,
+        lagStandardDeviation: Math.sqrt(lagVariance),
+        partitionStats,
+        // Đánh giá cân bằng tải
+        loadBalanceScore: 1 - (maxLag - minLag) / (totalLag > 0 ? totalLag : 1),
+        // Đề xuất số partition tối ưu dựa trên phân tích
+        recommendedPartitions: this._calculateRecommendedPartitions(
+          partitionStats,
+          totalLag
+        ),
+      };
+    } catch (error) {
+      console.error("Lỗi khi phân tích hiệu năng partition:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Tính toán số partition được đề xuất dựa trên phân tích hiệu năng
+   * @private
+   */
+  _calculateRecommendedPartitions(partitionStats, totalLag) {
+    const currentPartitions = partitionStats.length;
+
+    // Nếu lag quá cao, có thể cần tăng số partition
+    if (totalLag > currentPartitions * 10000) {
+      // Tính toán dựa trên công thức gấp đôi
+      let recommended = currentPartitions;
+      while (recommended < 48 && totalLag > recommended * 10000) {
+        recommended *= 2;
+      }
+      return recommended;
+    }
+
+    // Nếu lag thấp và phân phối đều, giữ nguyên
+    return currentPartitions;
+  }
 }
 
 module.exports = new KafkaService();

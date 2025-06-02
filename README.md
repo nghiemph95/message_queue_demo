@@ -1,6 +1,6 @@
 # Message Queue Demo with Kafka and RabbitMQ
 
-A demo system using Kafka and RabbitMQ in a microservices architecture with advanced features.
+A demo system using Kafka and RabbitMQ in a microservices architecture with advanced features and improved error handling.
 
 ## System Requirements
 
@@ -262,7 +262,48 @@ curl -X POST http://localhost:3000/kafka/admin \
       "numPartitions": 3,
       "replicationFactor": 1,
       "minCompactionLag": "60000",
-      "maxCompactionLag": "86400000"
+      "maxCompactionLag": "3600000"
+    }
+  }'
+```
+
+### Tăng số lượng partition cho topic
+
+```bash
+curl -X POST http://localhost:3000/kafka/admin \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "update-partitions",
+    "options": {
+      "topic": "test-topic",
+      "numPartitions": 12
+    }
+  }'
+```
+
+### Lấy thông tin offset của các partition
+
+```bash
+curl -X POST http://localhost:3000/kafka/admin \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "partition-offsets",
+    "options": {
+      "topic": "test-topic"
+    }
+  }'
+```
+
+### Theo dõi độ trễ (lag) của consumer
+
+```bash
+curl -X POST http://localhost:3000/kafka/admin \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "consumer-lag",
+    "options": {
+      "topic": "test-topic",
+      "groupId": "test-consumer-group"
     }
   }'
 ```
@@ -444,6 +485,9 @@ docker-compose logs -f consumer-rabbitmq
 - Hỗ trợ gửi tin nhắn trong một giao dịch (transaction)
 - Đảm bảo tính nhất quán với commit và abort
 - Hỗ trợ exactly-once semantics
+- Cải thiện xử lý lỗi với retry và exponential backoff
+- Tự động khởi tạo transaction coordinator
+- Tự động tạo topic nếu chưa tồn tại
 - API: `/kafka/transaction`
 
 #### Schema Registry
@@ -457,6 +501,17 @@ docker-compose logs -f consumer-rabbitmq
 - Tối ưu hóa không gian lưu trữ
 - Phù hợp cho các use case như changelog và event sourcing
 - API: `/kafka/admin` với action `create-compacted-topic`
+
+#### Quản lý Partition
+- Tăng số lượng partition cho topic hiện có
+- Lấy thông tin offset của các partition
+- API: `/kafka/admin` với action `update-partitions` và `partition-offsets`
+
+#### Giám sát Consumer Lag
+- Theo dõi độ trễ giữa producer và consumer
+- Tính toán lag cho từng partition và tổng lag
+- Phân tích hiệu suất của consumer group
+- API: `/kafka/admin` với action `consumer-lag`
 
 ### RabbitMQ
 
@@ -506,3 +561,43 @@ Lợi ích của cấu trúc mới:
 3. **Dễ test**: Có thể test từng module riêng biệt
 4. **Dễ mở rộng**: Thêm tính năng mới không ảnh hưởng đến code hiện tại
 5. **Rõ ràng hơn**: Cấu trúc rõ ràng giúp hiểu code nhanh hơn
+
+## Cập nhật mới
+
+### Route mới trong Kafka API
+
+- **update-partitions**: Tăng số lượng partition cho topic hiện có
+- **partition-offsets**: Lấy thông tin chi tiết về offset của các partition trong topic
+- **consumer-lag**: Tính toán và hiển thị độ trễ (lag) của consumer group
+
+Các route mới này giúp quản lý và giám sát hiệu suất của Kafka tốt hơn, đặc biệt trong việc tối ưu hóa số lượng partition và theo dõi hiệu suất của consumer.
+
+### Cải thiện xử lý lỗi Kafka Transaction
+
+- **Khởi tạo Transaction**: Thêm `initTransactions()` để khởi tạo transaction coordinator
+- **Retry với Exponential Backoff**: Tự động thử lại kết nối khi gặp lỗi
+- **Xử lý lỗi chi tiết**: Phân loại và xử lý từng loại lỗi cụ thể
+- **Kiểm tra Topic**: Tự động kiểm tra và tạo topic nếu chưa tồn tại
+- **Cấu hình nâng cao**: Thêm các tùy chọn như `allowAutoTopicCreation` và `retry`
+
+### Cấu hình RabbitMQ
+
+- **Cấu hình Queue**: Sửa tham số `durable` để đảm bảo tương thích với queue hiện có
+- **Xử lý lỗi PRECONDITION_FAILED**: Giải quyết vấn đề không khớp cấu hình giữa queue đã tồn tại và khai báo mới
+
+### Kế hoạch phát triển tương lai
+
+#### Dashboard giám sát
+
+Dự kiến phát triển dashboard để theo dõi lưu lượng dữ liệu trong hệ thống với các tính năng:
+
+- **Thu thập metrics**: Số lượng tin nhắn, thời gian xử lý, phân phối theo topic/queue
+- **API endpoints**: Cung cấp các endpoint để truy xuất metrics
+- **Giao diện trực quan**: Biểu đồ và bảng điều khiển để theo dõi hiệu suất
+- **Cảnh báo**: Thông báo khi phát hiện vấn đề
+
+Dự kiến triển khai theo các bước:
+1. Thu thập metrics cơ bản
+2. Xây dựng dashboard đơn giản
+3. Tích hợp với Kafka/RabbitMQ Admin API
+4. Cải thiện và mở rộng
