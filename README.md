@@ -601,3 +601,134 @@ Dự kiến triển khai theo các bước:
 2. Xây dựng dashboard đơn giản
 3. Tích hợp với Kafka/RabbitMQ Admin API
 4. Cải thiện và mở rộng
+
+## Tích hợp Kafka với Cơ sở dữ liệu
+
+Hệ thống này hỗ trợ ba phương pháp tích hợp Kafka với cơ sở dữ liệu:
+
+1. **Consumer-based Integration**: Đã triển khai trong `consumer-kafka`
+2. **Kafka Sink Connector**: Đưa dữ liệu từ Kafka vào MongoDB
+3. **Kafka Source Connector**: Đưa dữ liệu từ MongoDB vào Kafka
+
+### Cài đặt và Cấu hình Kafka Connect
+
+Để sử dụng Kafka Sink và Source Connector, cần cài đặt Kafka Connect và các connector plugin. Đã cấu hình sẵn trong `docker-compose.yml`.
+
+### Khởi chạy Kafka Sink Connector
+
+Kafka Sink Connector giúp đưa dữ liệu từ Kafka topic vào MongoDB mà không cần viết code consumer.
+
+1. **Tạo file cấu hình Sink Connector**:
+
+```json
+{
+  "name": "mongodb-sink-connector",
+  "config": {
+    "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
+    "topics": "test-topic",
+    "connection.uri": "mongodb://root:example@mongodb:27017",
+    "database": "message_queue_demo",
+    "collection": "kafka_messages_sink",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": false,
+    "value.converter.schemas.enable": false,
+    "transforms": "RenameField",
+    "transforms.RenameField.type": "org.apache.kafka.connect.transforms.ReplaceField$Value",
+    "transforms.RenameField.renames": "value:message_value",
+    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.UuidStrategy",
+    "writemodel.strategy": "com.mongodb.kafka.connect.sink.writemodel.strategy.DefaultWriteModelStrategy"
+  }
+}
+```
+
+2. **Triển khai Sink Connector thông qua REST API**:
+
+```bash
+curl -X POST -H "Content-Type: application/json" --data @mongodb-sink-connector.json http://localhost:8083/connectors
+```
+
+3. **Kiểm tra trạng thái của connector**:
+
+```bash
+curl -s http://localhost:8083/connectors/mongodb-sink-connector/status | jq
+```
+
+4. **Gửi message đến Kafka để kiểm tra**:
+
+```bash
+curl -X POST http://localhost:3000/kafka/send -H 'Content-Type: application/json' -d '{"message": "Test message for Kafka Sink Connector"}'
+```
+
+5. **Kiểm tra dữ liệu trong MongoDB**:
+   - Truy cập MongoDB Express: http://localhost:8081
+   - Đăng nhập với username: admin, password: pass
+   - Chọn database 'message_queue_demo' và collection 'kafka_messages_sink'
+
+### Khởi chạy Kafka Source Connector
+
+Kafka Source Connector giúp đưa dữ liệu từ MongoDB vào Kafka topic mà không cần viết code producer.
+
+1. **Tạo file cấu hình Source Connector**:
+
+```json
+{
+  "name": "mongodb-source-connector",
+  "config": {
+    "connector.class": "com.mongodb.kafka.connect.MongoSourceConnector",
+    "connection.uri": "mongodb://root:example@mongodb:27017",
+    "database": "message_queue_demo",
+    "collection": "source_data",
+    "topic.prefix": "mongodb",
+    "poll.max.batch.size": 1000,
+    "poll.await.time.ms": 5000,
+    "publish.full.document.only": true,
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": false,
+    "value.converter.schemas.enable": false
+  }
+}
+```
+
+2. **Tạo collection source_data trong MongoDB**:
+
+```bash
+docker exec -it mongodb mongosh -u root -p example --eval 'use message_queue_demo; db.createCollection("source_data")'
+```
+
+3. **Triển khai Source Connector thông qua REST API**:
+
+```bash
+curl -X POST -H "Content-Type: application/json" --data @mongodb-source-connector.json http://localhost:8083/connectors
+```
+
+4. **Kiểm tra trạng thái của connector**:
+
+```bash
+curl -s http://localhost:8083/connectors/mongodb-source-connector/status | jq
+```
+
+5. **Thêm dữ liệu vào MongoDB để kiểm tra**:
+
+```bash
+docker exec -it mongodb mongosh -u root -p example --eval 'use message_queue_demo; db.source_data.insertOne({name: "Test Document", value: "This is a test for Kafka Source Connector", timestamp: new Date()})'
+```
+
+6. **Kiểm tra message trong Kafka topic**:
+
+```bash
+docker exec -it kafka kafka-console-consumer --bootstrap-server kafka:29092 --topic mongodb.message_queue_demo.source_data --from-beginning
+```
+
+### So sánh các phương pháp tích hợp
+
+| Tiêu chí | Consumer-based Integration | Kafka Sink Connector | Kafka Source Connector |
+|----------|---------------------------|---------------------|----------------------|
+| **Mức độ tùy chỉnh** | Cao | Trung bình | Trung bình |
+| **Độ phức tạp triển khai** | Trung bình | Thấp | Thấp |
+| **Khả năng mở rộng** | Thấp | Cao | Cao |
+| **Xử lý lỗi tự động** | Phải tự xử lý | Có sẵn | Có sẵn |
+| **Quản lý offset** | Phải tự xử lý | Tự động | Tự động |
+| **Monitoring** | Phải tự triển khai | Có sẵn | Có sẵn |
+| **Phù hợp với** | Dự án nhỏ, cần logic tùy chỉnh | Hệ thống lớn, cần độ tin cậy cao | Đồng bộ dữ liệu giữa các hệ thống |
