@@ -1,0 +1,19 @@
+{
+  "name": "mongodb-sink-connector",
+  "config": {
+    "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
+    "topics": "test-topic",
+    "connection.uri": "mongodb://root:example@mongodb:27017",
+    "database": "message_queue_demo",
+    "collection": "kafka_messages_sink",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": false,
+    "value.converter.schemas.enable": false,
+    "transforms": "RenameField",
+    "transforms.RenameField.type": "org.apache.kafka.connect.transforms.ReplaceField$Value",
+    "transforms.RenameField.renames": "value:message_value",
+    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.UuidStrategy",
+    "writemodel.strategy": "com.mongodb.kafka.connect.sink.writemodel.strategy.DefaultWriteModelStrategy"
+  }
+}

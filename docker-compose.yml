@@ -26,6 +26,90 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     networks:
       - message-queue-network
+      
+  # Schema Registry
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.3.0
+    depends_on:
+      - kafka
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - message-queue-network
+      
+  # Kafka Connect
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.3.0
+    depends_on:
+      - kafka
+      - schema-registry
+      - mongodb
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "connect-cluster"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components,/connectors"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: INFO
+    volumes:
+      - ./connectors:/connectors
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing connectors..."
+        confluent-hub install --no-prompt mongodb/kafka-connect-mongodb:1.8.0
+        confluent-hub install --no-prompt confluentinc/kafka-connect-jdbc:10.5.2
+        #
+        echo "Launching Kafka Connect..."
+        /etc/confluent/docker/run
+    networks:
+      - message-queue-network
+      
+  # MongoDB
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - message-queue-network
+      
+  # MongoDB Express (Web UI for MongoDB)
+  mongo-express:
+    image: mongo-express:latest
+    depends_on:
+      - mongodb
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: pass
+    networks:
+      - message-queue-network
 
   # RabbitMQ
   rabbitmq:
@@ -78,3 +162,6 @@ services:
 networks:
   message-queue-network:
     driver: bridge
+
+volumes:
+  mongodb-data:
